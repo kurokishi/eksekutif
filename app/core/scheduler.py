@@ -1,77 +1,91 @@
-# app/core/scheduler.py
-
 import pandas as pd
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from .time_parser import TimeParser
 from .cleaner import DataCleaner
+
 
 class Scheduler:
 
     def __init__(self, config):
         self.config = config
+        self.tp = TimeParser()
 
-    def generate_time_slots(self):
+    def generate_slots(self):
         slots = []
-        current = time(self.config.start_hour, self.config.start_minute)
-        end = time(14, 30)
+        current = datetime.strptime(
+            f"{self.config.start_hour}:{self.config.start_minute}", "%H:%M"
+        )
 
-        while current <= end:
-            slots.append(current)
-            dt = datetime.combine(datetime.today(), current) + timedelta(minutes=self.config.interval_minutes)
-            current = dt.time()
+        end_time = self.config.time_slot_end()
+
+        while current.time() <= end_time:
+            slots.append(current.time())
+            current += timedelta(minutes=self.config.interval_minutes)
 
         return slots
 
-    def process(self, df, jenis):
-        df = DataCleaner.clean(df, self.config.hari_list, jenis)
-        tp = TimeParser()
+    # FINAL API METHOD
+    def process_schedule(self, df, jenis):
+        df = DataCleaner.clean(df, self.config.hari_list, jenis, self.config.auto_fix_errors)
+
+        if df.empty:
+            return pd.DataFrame()
+
+        slots = self.generate_slots()
+        slot_str = [t.strftime("%H:%M") for t in slots]
 
         results = []
-        slots = self.generate_time_slots()
-        slots_str = [t.strftime("%H:%M") for t in slots]
 
-        for (dokter, poli), grp in df.groupby(['Nama Dokter', 'Poli Asal']):
+        for (dok, poli), group in df.groupby(["Nama Dokter", "Poli Asal"]):
             for hari in self.config.hari_list:
-
-                if hari not in grp.columns:
+                if hari not in group.columns:
                     continue
 
                 ranges = []
-                for s in grp[hari]:
-                    st, en = tp.parse(s)
-                    if st and en:
-                        if en > time(14, 30):
-                            en = time(14, 30)
-                        ranges.append((st, en))
+                for s in group[hari].dropna():
+                    start, end = self.tp.parse(s)
+                    if start and end:
+                        ranges.append((start, end))
+
+                if not ranges:
+                    continue
 
                 merged = self.merge_ranges(ranges)
-                row = self.create_row(poli, jenis, hari, dokter, merged, slots, slots_str)
+
+                row = {
+                    "POLI ASAL": poli,
+                    "JENIS POLI": jenis,
+                    "HARI": hari,
+                    "DOKTER": dok
+                }
+
+                for i, sl in enumerate(slots):
+                    sl_end = (datetime.combine(datetime.today(), sl) +
+                              timedelta(minutes=self.config.interval_minutes)).time()
+
+                    overlap = any(not (sl_end <= a or sl >= b) for a, b in merged)
+
+                    row[slot_str[i]] = 'R' if overlap and jenis == "Reguler" else \
+                                       'E' if overlap and jenis != "Reguler" else ""
+
                 results.append(row)
 
-        return pd.DataFrame(results)
+        df_out = pd.DataFrame(results)
+        return df_out
 
-    def merge_ranges(self, ranges):
+    @staticmethod
+    def merge_ranges(ranges):
         if not ranges:
             return []
-        ranges.sort()
+
+        ranges = sorted(ranges, key=lambda x: x[0])
         merged = [list(ranges[0])]
+
         for start, end in ranges[1:]:
-            ls, le = merged[-1]
-            if start <= le:
-                merged[-1][1] = max(le, end)
+            last_start, last_end = merged[-1]
+            if start <= last_end:
+                merged[-1][1] = max(last_end, end)
             else:
                 merged.append([start, end])
-        return merged
 
-    def create_row(self, poli, jenis, hari, dokter, merged, slots, slots_str):
-        row = {
-            'POLI ASAL': poli,
-            'JENIS POLI': jenis,
-            'HARI': hari,
-            'DOKTER': dokter
-        }
-        for i, slot in enumerate(slots):
-            end = (datetime.combine(datetime.today(), slot) + timedelta(minutes=30)).time()
-            overlap = any(not (end <= st or slot >= en) for st, en in merged)
-            row[slots_str[i]] = 'R' if overlap and jenis == 'Reguler' else 'E' if overlap else ''
-        return row
+        return merged
