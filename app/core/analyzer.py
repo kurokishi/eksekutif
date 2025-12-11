@@ -1,45 +1,41 @@
-# app/core/analyzer.py
 import pandas as pd
 import re
 
-class ErrorAnalyzer:
-    """Sederhana: analisa struktur sheet Reguler/Poleks"""
 
-    @staticmethod
-    def analyze_sheet(df: pd.DataFrame, hari_list: list):
+class ErrorAnalyzer:
+
+    def analyze_sheet(self, df, hari_list):
         report = {
-            'is_valid': True,
-            'errors': [],
-            'warnings': [],
-            'total_rows': len(df)
+            "is_valid": True,
+            "errors": [],
+            "warnings": [],
+            "total_rows": len(df)
         }
 
-        # cek kolom wajib
-        required = ['Nama Dokter', 'Poli Asal', 'Jenis Poli']
-        missing = [c for c in required if c not in df.columns]
-        if missing:
-            report['is_valid'] = False
-            report['errors'].append(f"Missing required columns: {missing}")
+        required = ["Nama Dokter", "Poli Asal", "Jenis Poli"]
+        miss = [c for c in required if c not in df.columns]
 
-        # cek format waktu sederhana
-        pattern = re.compile(r'^\d{1,2}[:\.]\d{2}\s*-\s*\d{1,2}[:\.]\d{2}$')
-        cols = [h for h in hari_list if h in df.columns]
+        if miss:
+            report["is_valid"] = False
+            report["errors"].append(f"Missing columns: {miss}")
+
+        pattern = re.compile(r"\d{1,2}[:\.]\d{2}\s*-\s*\d{1,2}[:\.]\d{2}")
         bad = 0
-        for col in cols:
-            for v in df[col].dropna().astype(str).values:
-                if not pattern.search(v.strip()):
-                    bad += 1
+        for h in hari_list:
+            if h in df.columns:
+                for v in df[h].dropna().astype(str):
+                    if not pattern.search(v):
+                        bad += 1
+
         if bad:
-            report['warnings'].append(f"{bad} cell(s) with non-standard time format")
-            # tidak langsung menjadikan invalid, karena ada auto-fix
+            report["warnings"].append(f"{bad} invalid time format")
+
         return report
 
-    @staticmethod
-    def format_report(rep: dict) -> str:
-        s = f"Valid: {'✅' if rep.get('is_valid') else '❌'}\n"
-        s += f"Total Rows: {rep.get('total_rows',0)}\n"
-        if rep.get('errors'):
-            s += "Errors:\n" + "\n".join(f"- {e}" for e in rep['errors']) + "\n"
-        if rep.get('warnings'):
-            s += "Warnings:\n" + "\n".join(f"- {w}" for w in rep['warnings']) + "\n"
-        return s
+    def format_report(self, r):
+        out = f"Valid: {r['is_valid']}\nRows: {r['total_rows']}\n"
+        if r["errors"]:
+            out += "Errors:\n" + "\n".join(r["errors"]) + "\n"
+        if r["warnings"]:
+            out += "Warnings:\n" + "\n".join(r["warnings"]) + "\n"
+        return out
