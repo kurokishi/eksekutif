@@ -16,26 +16,20 @@ class ExcelWriter:
         self.fill_e = PatternFill(start_color="0000FF", fill_type="solid")
         self.fill_over = PatternFill(start_color="FF0000", fill_type="solid")
 
-        # border tebal untuk pemisah hari
-        self.border_top_thick = Border(top=Side(border_style="thick"))
-
         # border header
         self.border_header = Border(bottom=Side(border_style="thick"))
 
     # --------------------------------------------------------
-    # Helper: gabung rentang waktu slot per 30 menit
+    # Helper: gabung rentang waktu slot per interval
     # --------------------------------------------------------
     def _combine_ranges(self, slots, interval):
         if not slots:
             return []
-
         ts = [datetime.strptime(t, "%H:%M") for t in slots]
         ts.sort()
-
         ranges = []
         start = ts[0]
         end = start + timedelta(minutes=interval)
-
         for t in ts[1:]:
             if t == end:
                 end = t + timedelta(minutes=interval)
@@ -43,12 +37,59 @@ class ExcelWriter:
                 ranges.append((start, end))
                 start = t
                 end = start + timedelta(minutes=interval)
-
         ranges.append((start, end))
         return ranges
 
     def _format_range(self, a, b):
         return f"{a.strftime('%H.%M')}–{b.strftime('%H.%M')}"
+
+    # --------------------------------------------------------
+    # SHEET: PEAK HOUR ANALYSIS
+    # --------------------------------------------------------
+    def _create_peak_hour(self, wb, df, slot_str):
+        if "Peak Hour Analysis" in wb.sheetnames:
+            del wb["Peak Hour Analysis"]
+
+        ws = wb.create_sheet("Peak Hour Analysis")
+        ws.append(["HARI", "SLOT", "JUMLAH", "KATEGORI"])
+
+        for hari, g in df.groupby("HARI"):
+            slot_count = {s: 0 for s in slot_str}
+
+            for _, row in g.iterrows():
+                for s in slot_str:
+                    if row.get(s) in ["R", "E"]:
+                        slot_count[s] += 1
+
+            max_val = max(slot_count.values())
+            peak_slots = [s for s, v in slot_count.items() if v == max_val]
+
+            kategori = "High Load" if max_val >= 10 else "Medium" if max_val >= 5 else "Low"
+
+            for s in peak_slots:
+                ws.append([hari, s, max_val, kategori])
+
+    # --------------------------------------------------------
+    # SHEET: CONFLICT CHECK DOCTOR
+    # --------------------------------------------------------
+    def _create_conflict_doctor(self, wb, df, slot_str):
+        if "Conflict Dokter" in wb.sheetnames:
+            del wb["Conflict Dokter"]
+
+        ws = wb.create_sheet("Conflict Dokter")
+        ws.append(["DOKTER", "HARI", "SLOT", "KONFLIK"])
+
+        for (dokter, hari), g in df.groupby(["DOKTER", "HARI"]):
+            for slot in slot_str:
+                vals = g[slot].unique()
+
+                # Konflik: dokter muncul di lebih dari 1 poli
+                if len(vals) > 1 and any(v in ["R", "E"] for v in vals):
+                    ws.append([dokter, hari, slot, "Dokter memiliki 2 poli berbeda pada jam yang sama"])
+
+                # Konflik: R dan E di slot sama
+                if "R" in vals and "E" in vals:
+                    ws.append([dokter, hari, slot, "Bentrok Reguler & Poleks"])
 
     # --------------------------------------------------------
     # SHEET: Rekap Layanan per Dokter
@@ -82,33 +123,14 @@ class ExcelWriter:
             del wb["Rekap Poli"]
 
         ws = wb.create_sheet("Rekap Poli")
-        ws.append([
-            "POLI",
-            "HARI",
-            "TOTAL JAM REGULER",
-            "TOTAL JAM POLEKS",
-            "TOTAL JAM LAYANAN"
-        ])
+        ws.append(["POLI", "HARI", "TOTAL JAM REG", "TOTAL JAM POLEKS", "TOTAL JAM"])
 
         interval = self.config.interval_minutes
 
         for (poli, hari), g in df.groupby(["POLI ASAL", "HARI"]):
-            tot_r = 0
-            tot_e = 0
-            for slot in slot_str:
-                v = g.iloc[0].get(slot, "")
-                if v == "R":
-                    tot_r += interval / 60
-                elif v == "E":
-                    tot_e += interval / 60
-
-            ws.append([
-                poli,
-                hari,
-                round(tot_r, 2),
-                round(tot_e, 2),
-                round(tot_r + tot_e, 2)
-            ])
+            tot_r = sum((g.iloc[0].get(s) == "R") * interval/60 for s in slot_str)
+            tot_e = sum((g.iloc[0].get(s) == "E") * interval/60 for s in slot_str)
+            ws.append([poli, hari, round(tot_r, 2), round(tot_e, 2), round(tot_r+tot_e, 2)])
 
     # --------------------------------------------------------
     # SHEET: Rekap Dokter
@@ -118,34 +140,14 @@ class ExcelWriter:
             del wb["Rekap Dokter"]
 
         ws = wb.create_sheet("Rekap Dokter")
-        ws.append([
-            "DOKTER",
-            "HARI",
-            "TOTAL JAM REGULER",
-            "TOTAL JAM POLEKS",
-            "TOTAL JAM"
-        ])
+        ws.append(["DOKTER", "HARI", "TOTAL JAM REG", "TOTAL JAM POLEKS", "TOTAL JAM"])
 
         interval = self.config.interval_minutes
 
         for (dokter, hari), g in df.groupby(["DOKTER", "HARI"]):
-            tot_r = 0
-            tot_e = 0
-
-            for slot in slot_str:
-                v = g.iloc[0].get(slot, "")
-                if v == "R":
-                    tot_r += interval / 60
-                elif v == "E":
-                    tot_e += interval / 60
-
-            ws.append([
-                dokter,
-                hari,
-                round(tot_r, 2),
-                round(tot_e, 2),
-                round(tot_r + tot_e, 2)
-            ])
+            tot_r = sum((g.iloc[0].get(s) == "R") * interval/60 for s in slot_str)
+            tot_e = sum((g.iloc[0].get(s) == "E") * interval/60 for s in slot_str)
+            ws.append([dokter, hari, round(tot_r, 2), round(tot_e, 2), round(tot_r+tot_e, 2)])
 
     # --------------------------------------------------------
     # SHEET: Grafik Beban Poli
@@ -158,32 +160,27 @@ class ExcelWriter:
         ws["A1"] = "Grafik Beban Poli (Total Jam Layanan per Minggu)"
 
         rp = wb["Rekap Poli"]
-
         table = {}
+
         for row in rp.iter_rows(min_row=2, values_only=True):
             poli = row[0]
             total = row[4]
             table[poli] = table.get(poli, 0) + total
 
         ws.append(["POLI", "TOTAL JAM"])
-
-        for k, v in table.items():
-            ws.append([k, v])
+        for p, t in table.items():
+            ws.append([p, t])
 
         chart = BarChart()
         chart.title = "Beban Poli"
-
         data = Reference(ws, min_col=2, min_row=2, max_row=ws.max_row)
         cats = Reference(ws, min_col=1, min_row=2, max_row=ws.max_row)
-
         chart.add_data(data)
         chart.set_categories(cats)
-        chart.y_axis.title = "Jam"
-
         ws.add_chart(chart, "E5")
 
     # --------------------------------------------------------
-    # SHEET UTAMA: Jadwal
+    # SHEET UTAMA: Jadwal (tanpa border antar hari)
     # --------------------------------------------------------
     def write(self, source_file, df, slot_str):
         wb = load_workbook(source_file)
@@ -198,16 +195,18 @@ class ExcelWriter:
         for _, row in df.iterrows():
             ws.append([row.get(h, "") for h in headers])
 
-        # Warnai jadwal + border antar hari + overload
+        # pewarnaan slot (tanpa border antar hari)
         self.apply_styles(ws, df, slot_str)
 
         # Sheet Rekap
         self._create_rekap_layanan(wb, df, slot_str)
         self._create_rekap_poli(wb, df, slot_str)
         self._create_rekap_dokter(wb, df, slot_str)
+        self._create_peak_hour(wb, df, slot_str)
+        self._create_conflict_doctor(wb, df, slot_str)
         self._create_grafik_poli(wb)
 
-        # Finishing style
+        # finishing
         self._auto_width_all_sheets(wb)
         self._style_headers_all(wb)
         self._freeze_headers_all(wb)
@@ -218,7 +217,7 @@ class ExcelWriter:
         return buf
 
     # --------------------------------------------------------
-    # STYLE UNTUK SHEET JADWAL
+    # Pewarnaan slot (tanpa border antar hari)
     # --------------------------------------------------------
     def apply_styles(self, ws, df, slot_str):
 
@@ -226,40 +225,20 @@ class ExcelWriter:
         records = df.to_dict("records")
 
         excel_row = 2
-        last_hari = None
-
-        # jumlah kolom dinamis
-        num_cols = max(ws.max_column, 4 + len(slot_str))
 
         for rec in records:
             hari = rec.get("HARI")
 
-            # border pemisah antar hari
-            if last_hari is not None and hari != last_hari:
-                for col in range(1, num_cols + 1):
-                    try:
-                        ws.cell(row=excel_row, column=col).border = self.border_top_thick
-                    except:
-                        pass
-
-            last_hari = hari
-
-            # pewarnaan slot
             for idx, slot in enumerate(slot_str):
                 v = rec.get(slot, "")
                 col_idx = 5 + idx
 
-                try:
-                    cell = ws.cell(row=excel_row, column=col_idx)
-                except:
-                    continue
+                cell = ws.cell(row=excel_row, column=col_idx)
 
                 if v == "R":
                     cell.fill = self.fill_r
-
                 elif v == "E":
                     counter[hari][slot] += 1
-
                     if counter[hari][slot] > self.config.max_poleks_per_slot:
                         cell.fill = self.fill_over
                     else:
@@ -268,18 +247,13 @@ class ExcelWriter:
             excel_row += 1
 
     # --------------------------------------------------------
-    # STYLE PROFESIONAL
+    # Styling profesional
     # --------------------------------------------------------
     def _auto_width_all_sheets(self, wb):
         for ws in wb.worksheets:
             for col in ws.columns:
-                max_len = 0
-                for cell in col:
-                    try:
-                        max_len = max(max_len, len(str(cell.value)))
-                    except:
-                        pass
-                ws.column_dimensions[col[0].column_letter].width = max_len + 2
+                width = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+                ws.column_dimensions[col[0].column_letter].width = width + 2
 
     def _style_headers_all(self, wb):
         for ws in wb.worksheets:
