@@ -1,12 +1,11 @@
-# jadwal.py
 import streamlit as st
 import pandas as pd
 
-# Modular imports
 from app.config import Config
 from app.core.scheduler import Scheduler
 from app.core.excel_writer import ExcelWriter
 from app.core.analyzer import ErrorAnalyzer
+
 from app.ui.sidebar import render_sidebar
 from app.ui.tab_upload import render_upload_tab
 from app.ui.tab_analyzer import render_analyzer_tab
@@ -20,18 +19,18 @@ def main():
         layout="wide"
     )
 
-    st.title("🏥 Pengisi Jadwal Poli — Struktur Modular")
+    st.title("🏥 Pengisi Jadwal Poli — Modular Version")
 
-    # Init config in session
+    # init config in session
     if "config" not in st.session_state:
         st.session_state.config = Config()
 
     config = st.session_state.config
 
-    # Sidebar = UI global
+    # Sidebar
     render_sidebar(config)
 
-    # Instantiate core services once
+    # Instantiate core modules
     scheduler = Scheduler(config)
     writer = ExcelWriter(config)
     analyzer = ErrorAnalyzer()
@@ -44,33 +43,17 @@ def main():
         "⚙️ Pengaturan"
     ])
 
-    # Tab: Upload & Proses
     with tab1:
-        render_upload_tab(
-            scheduler=scheduler,
-            writer=writer,
-            analyzer=analyzer,
-            config=config
-        )
+        render_upload_tab(scheduler, writer, analyzer, config)
 
-    # Tab: Error Analyzer
     with tab2:
-        render_analyzer_tab(
-            analyzer=analyzer,
-            config=config
-        )
+        render_analyzer_tab(analyzer, config)
 
-    # Tab: Visualisasi jadwal
     with tab3:
-        render_visualization_tab(
-            config=config
-        )
+        render_visualization_tab(config)
 
-    # Tab: Settings
     with tab4:
-        render_settings_tab(
-            config=config
-        )
+        render_settings_tab(config)
 
 
 if __name__ == "__main__":
