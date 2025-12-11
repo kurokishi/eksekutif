@@ -1,37 +1,35 @@
-# app/core/cleaner.py
-
 import pandas as pd
 import re
+
 
 class DataCleaner:
 
     @staticmethod
-    def clean(df, hari_list, jenis_poli):
+    def clean(df, hari_list, jenis_poli, auto_fix=True):
         df = df.copy()
 
-        required = ['Nama Dokter', 'Poli Asal', 'Jenis Poli']
-        for col in required:
-            if col not in df.columns:
-                df[col] = ''
+        required = ["Nama Dokter", "Poli Asal", "Jenis Poli"]
+        for c in required:
+            if c not in df.columns:
+                df[c] = ""
 
-        df['Jenis Poli'] = df['Jenis Poli'].fillna(jenis_poli)
+        df["Jenis Poli"] = df["Jenis Poli"].fillna(jenis_poli)
 
-        for hari in hari_list:
-            if hari in df.columns:
-                df[hari] = df[hari].apply(DataCleaner.fix_time)
+        for h in hari_list:
+            if h in df.columns and auto_fix:
+                df[h] = df[h].apply(DataCleaner.fix_format)
 
-        if any(h in df.columns for h in hari_list):
+        if hari_list:
             df = df[df[hari_list].notna().any(axis=1)]
 
         return df
 
     @staticmethod
-    def fix_time(time_str):
-        if pd.isna(time_str):
+    def fix_format(v):
+        if pd.isna(v):
             return ""
-        s = re.sub(r'[^\d.\-:]', '', str(time_str).strip())
-        if '.' in s and ':' not in s:
-            parts = s.split('-')
-            if len(parts) == 2:
-                return f"{parts[0].replace('.',':')}-{parts[1].replace('.',':')}"
-        return s
+        v = re.sub(r"[^0-9\.\:\-\s]", "", str(v)).replace(" ", "")
+        p = v.split("-")
+        if len(p) == 2:
+            return p[0].replace(".", ":") + "-" + p[1].replace(".", ":")
+        return v
