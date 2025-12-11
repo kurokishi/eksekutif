@@ -1,26 +1,23 @@
-# app/config.py
-
+from dataclasses import dataclass, field
 from datetime import time
 
+
+@dataclass
 class Config:
-    def __init__(self):
-        # Waktu dasar
-        self.start_hour = 7
-        self.start_minute = 30
-        self.interval_minutes = 30
-        self.max_poleks_per_slot = 7
+    start_hour: int = 7
+    start_minute: int = 30
+    interval_minutes: int = 30
+    max_poleks_per_slot: int = 7
+    auto_fix_errors: bool = True
+    enable_sabtu: bool = False
 
-        # Mode Sabtu (default: off)
-        self.enable_sabtu = False
-
-        # Hari default
-        self.hari_order = {
-            "Senin": 1,
-            "Selasa": 2,
-            "Rabu": 3,
-            "Kamis": 4,
-            "Jum'at": 5
-        }
+    hari_order: dict = field(default_factory=lambda: {
+        "Senin": 1,
+        "Selasa": 2,
+        "Rabu": 3,
+        "Kamis": 4,
+        "Jum'at": 5
+    })
 
     @property
     def hari_list(self):
@@ -28,3 +25,6 @@ class Config:
         if self.enable_sabtu and "Sabtu" not in hari:
             hari.append("Sabtu")
         return hari
+
+    def time_slot_end(self):
+        return time(14, 30)
