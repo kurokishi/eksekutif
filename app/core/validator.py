@@ -1,16 +1,15 @@
-# app/core/validator.py
 from openpyxl import load_workbook
+
 
 class Validator:
     @staticmethod
-    def validate_file(file_obj, required_sheets=None):
-        if required_sheets is None:
-            required_sheets = ['Reguler', 'Poleks']
+    def validate(file):
         try:
-            wb = load_workbook(file_obj, read_only=True)
-            missing = [s for s in required_sheets if s not in wb.sheetnames]
-            if missing:
-                return False, f"Missing sheets: {', '.join(missing)}"
+            wb = load_workbook(file)
+            if "Reguler" not in wb.sheetnames:
+                return False, "Sheet 'Reguler' tidak ditemukan"
+            if "Poleks" not in wb.sheetnames:
+                return False, "Sheet 'Poleks' tidak ditemukan"
             return True, None
         except Exception as e:
             return False, str(e)
