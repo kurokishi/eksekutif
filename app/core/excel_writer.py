@@ -16,20 +16,24 @@ class ExcelWriter:
         self.fill_e = PatternFill(start_color="0000FF", fill_type="solid")
         self.fill_over = PatternFill(start_color="FF0000", fill_type="solid")
 
+        # warna untuk peta konflik
+        self.fill_conflict_normal = PatternFill(start_color="FFFF00", fill_type="solid")  # kuning
+        self.fill_conflict_hard = PatternFill(start_color="FF0000", fill_type="solid")    # merah
+
         # border header
         self.border_header = Border(bottom=Side(border_style="thick"))
 
-    # --------------------------------------------------------
-    # Helper: gabung rentang waktu slot per interval
-    # --------------------------------------------------------
+    # ======================================================================
+    # HELPER – gabung range jam
+    # ======================================================================
     def _combine_ranges(self, slots, interval):
         if not slots:
             return []
-        ts = [datetime.strptime(t, "%H:%M") for t in slots]
-        ts.sort()
+        ts = sorted(datetime.strptime(t, "%H:%M") for t in slots)
         ranges = []
         start = ts[0]
         end = start + timedelta(minutes=interval)
+
         for t in ts[1:]:
             if t == end:
                 end = t + timedelta(minutes=interval)
@@ -43,35 +47,33 @@ class ExcelWriter:
     def _format_range(self, a, b):
         return f"{a.strftime('%H.%M')}–{b.strftime('%H.%M')}"
 
-    # --------------------------------------------------------
-    # SHEET: PEAK HOUR ANALYSIS
-    # --------------------------------------------------------
+    # ======================================================================
+    # FEATURE 1 — Peak Hour Analysis
+    # ======================================================================
     def _create_peak_hour(self, wb, df, slot_str):
         if "Peak Hour Analysis" in wb.sheetnames:
             del wb["Peak Hour Analysis"]
-
         ws = wb.create_sheet("Peak Hour Analysis")
+
         ws.append(["HARI", "SLOT", "JUMLAH", "KATEGORI"])
 
         for hari, g in df.groupby("HARI"):
-            slot_count = {s: 0 for s in slot_str}
-
+            counts = {s: 0 for s in slot_str}
             for _, row in g.iterrows():
-                for s in slot_str:
-                    if row.get(s) in ["R", "E"]:
-                        slot_count[s] += 1
+                for slot in slot_str:
+                    if row.get(slot) in ["R", "E"]:
+                        counts[slot] += 1
 
-            max_val = max(slot_count.values())
-            peak_slots = [s for s, v in slot_count.items() if v == max_val]
+            max_v = max(counts.values())
+            kategori = "High Load" if max_v >= 10 else "Medium" if max_v >= 5 else "Low"
 
-            kategori = "High Load" if max_val >= 10 else "Medium" if max_val >= 5 else "Low"
+            for slot, v in counts.items():
+                if v == max_v:
+                    ws.append([hari, slot, v, kategori])
 
-            for s in peak_slots:
-                ws.append([hari, s, max_val, kategori])
-
-    # --------------------------------------------------------
-    # SHEET: CONFLICT CHECK DOCTOR
-    # --------------------------------------------------------
+    # ======================================================================
+    # FEATURE 2 — Conflict Checking Dokter (textual)
+    # ======================================================================
     def _create_conflict_doctor(self, wb, df, slot_str):
         if "Conflict Dokter" in wb.sheetnames:
             del wb["Conflict Dokter"]
@@ -83,127 +85,171 @@ class ExcelWriter:
             for slot in slot_str:
                 vals = g[slot].unique()
 
-                # Konflik: dokter muncul di lebih dari 1 poli
+                # Konflik poli berbeda
                 if len(vals) > 1 and any(v in ["R", "E"] for v in vals):
-                    ws.append([dokter, hari, slot, "Dokter memiliki 2 poli berbeda pada jam yang sama"])
+                    ws.append([dokter, hari, slot, "Dokter memiliki 2 poli berbeda di jam yang sama"])
 
-                # Konflik: R dan E di slot sama
+                # Konflik R & E bersamaan
                 if "R" in vals and "E" in vals:
                     ws.append([dokter, hari, slot, "Bentrok Reguler & Poleks"])
 
-    # --------------------------------------------------------
-    # SHEET: Rekap Layanan per Dokter
-    # --------------------------------------------------------
+    # ======================================================================
+    # FEATURE 3 — VISUAL CONFLICT MAP
+    # ======================================================================
+    def _create_conflict_map(self, wb, df, slot_str):
+        if "Peta Konflik Dokter" in wb.sheetnames:
+            del wb["Peta Konflik Dokter"]
+
+        ws = wb.create_sheet("Peta Konflik Dokter")
+
+        # Header
+        doctors = sorted(df["DOKTER"].unique())
+        ws.append(["SLOT"] + doctors)
+
+        for slot in slot_str:
+            row = [slot] + ["" for _ in doctors]
+            ws.append(row)
+
+        # mapping dokter ke kolom
+        doc_index = {doc: i + 2 for i, doc in enumerate(doctors)}
+
+        # isi warna konflik
+        for (dokter, hari), g in df.groupby(["DOKTER", "HARI"]):
+            col = doc_index[dokter]
+
+            for row_idx, slot in enumerate(slot_str, start=2):
+                vals = g[slot].unique()
+
+                if len(vals) > 1 and any(v in ["R", "E"] for v in vals):
+                    ws.cell(row=row_idx, column=col).fill = self.fill_conflict_normal
+                if "R" in vals and "E" in vals:
+                    ws.cell(row=row_idx, column=col).fill = self.fill_conflict_hard
+
+    # ======================================================================
+    # FEATURE 4 — Rekap Layanan (range)
+    # ======================================================================
     def _create_rekap_layanan(self, wb, df, slot_str):
         if "Rekap Layanan" in wb.sheetnames:
             del wb["Rekap Layanan"]
 
         ws = wb.create_sheet("Rekap Layanan")
-        ws.append(["POLI ASAL", "HARI", "DOKTER", "JENIS", "JAM LAYANAN"])
+        ws.append(["POLI", "HARI", "DOKTER", "JENIS", "JAM LAYANAN"])
 
         interval = self.config.interval_minutes
 
-        for (poli, hari, dokter), g in df.groupby(
-            ["POLI ASAL", "HARI", "DOKTER"]
-        ):
-            r_slots = [s for s in slot_str if g.iloc[0].get(s, "") == "R"]
-            e_slots = [s for s in slot_str if g.iloc[0].get(s, "") == "E"]
+        for (poli, hari, dokter), g in df.groupby(["POLI ASAL", "HARI", "DOKTER"]):
+            R = [s for s in slot_str if g.iloc[0].get(s) == "R"]
+            E = [s for s in slot_str if g.iloc[0].get(s) == "E"]
 
-            for a, b in self._combine_ranges(r_slots, interval):
+            for a, b in self._combine_ranges(R, interval):
                 ws.append([poli, hari, dokter, "Reguler", self._format_range(a, b)])
 
-            for a, b in self._combine_ranges(e_slots, interval):
+            for a, b in self._combine_ranges(E, interval):
                 ws.append([poli, hari, dokter, "Poleks", self._format_range(a, b)])
 
-    # --------------------------------------------------------
-    # SHEET: Rekap Poli
-    # --------------------------------------------------------
+    # ======================================================================
+    # FEATURE 5 — Rekap POLI
+    # ======================================================================
     def _create_rekap_poli(self, wb, df, slot_str):
         if "Rekap Poli" in wb.sheetnames:
             del wb["Rekap Poli"]
 
         ws = wb.create_sheet("Rekap Poli")
-        ws.append(["POLI", "HARI", "TOTAL JAM REG", "TOTAL JAM POLEKS", "TOTAL JAM"])
+        ws.append(["POLI", "HARI", "TOTAL REG", "TOTAL POLEKS", "TOTAL JAM"])
 
         interval = self.config.interval_minutes
 
         for (poli, hari), g in df.groupby(["POLI ASAL", "HARI"]):
             tot_r = sum((g.iloc[0].get(s) == "R") * interval/60 for s in slot_str)
             tot_e = sum((g.iloc[0].get(s) == "E") * interval/60 for s in slot_str)
-            ws.append([poli, hari, round(tot_r, 2), round(tot_e, 2), round(tot_r+tot_e, 2)])
+            ws.append([poli, hari, round(tot_r,2), round(tot_e,2), round(tot_r+tot_e,2)])
 
-    # --------------------------------------------------------
-    # SHEET: Rekap Dokter
-    # --------------------------------------------------------
+    # ======================================================================
+    # FEATURE 6 — Rekap Dokter dengan PENGGABUNGAN SHIFT
+    # ======================================================================
     def _create_rekap_dokter(self, wb, df, slot_str):
         if "Rekap Dokter" in wb.sheetnames:
             del wb["Rekap Dokter"]
 
         ws = wb.create_sheet("Rekap Dokter")
-        ws.append(["DOKTER", "HARI", "TOTAL JAM REG", "TOTAL JAM POLEKS", "TOTAL JAM"])
+        ws.append(["DOKTER", "HARI", "SHIFT", "TOTAL JAM"])
 
         interval = self.config.interval_minutes
 
         for (dokter, hari), g in df.groupby(["DOKTER", "HARI"]):
-            tot_r = sum((g.iloc[0].get(s) == "R") * interval/60 for s in slot_str)
-            tot_e = sum((g.iloc[0].get(s) == "E") * interval/60 for s in slot_str)
-            ws.append([dokter, hari, round(tot_r, 2), round(tot_e, 2), round(tot_r+tot_e, 2)])
 
-    # --------------------------------------------------------
-    # SHEET: Grafik Beban Poli
-    # --------------------------------------------------------
+            # kumpulkan slot aktif (R/E)
+            active_slots = [s for s in slot_str if g.iloc[0].get(s) in ["R", "E"]]
+
+            # gabungkan shift otomatis
+            merged = self._combine_ranges(active_slots, interval)
+
+            for a, b in merged:
+                dur = (b - a).seconds / 3600
+                ws.append([
+                    dokter,
+                    hari,
+                    self._format_range(a, b),
+                    round(dur, 2)
+                ])
+
+    # ======================================================================
+    # FEATURE 7 — Grafik Beban POLI
+    # ======================================================================
     def _create_grafik_poli(self, wb):
         if "Grafik Beban Poli" in wb.sheetnames:
             del wb["Grafik Beban Poli"]
 
         ws = wb.create_sheet("Grafik Beban Poli")
-        ws["A1"] = "Grafik Beban Poli (Total Jam Layanan per Minggu)"
+        ws["A1"] = "Grafik Beban Poli per Minggu"
 
         rp = wb["Rekap Poli"]
-        table = {}
 
+        table = {}
         for row in rp.iter_rows(min_row=2, values_only=True):
-            poli = row[0]
-            total = row[4]
-            table[poli] = table.get(poli, 0) + total
+            table[row[0]] = table.get(row[0], 0) + row[4]
 
         ws.append(["POLI", "TOTAL JAM"])
-        for p, t in table.items():
-            ws.append([p, t])
+        for k, v in table.items():
+            ws.append([k, v])
 
         chart = BarChart()
         chart.title = "Beban Poli"
+
         data = Reference(ws, min_col=2, min_row=2, max_row=ws.max_row)
         cats = Reference(ws, min_col=1, min_row=2, max_row=ws.max_row)
+
         chart.add_data(data)
         chart.set_categories(cats)
         ws.add_chart(chart, "E5")
 
-    # --------------------------------------------------------
+    # ======================================================================
     # SHEET UTAMA: Jadwal (tanpa border antar hari)
-    # --------------------------------------------------------
+    # ======================================================================
     def write(self, source_file, df, slot_str):
         wb = load_workbook(source_file)
 
+        # clean old
         if "Jadwal" in wb.sheetnames:
             del wb["Jadwal"]
-
         ws = wb.create_sheet("Jadwal")
+
         headers = ["POLI ASAL", "JENIS POLI", "HARI", "DOKTER"] + slot_str
         ws.append(headers)
 
-        for _, row in df.iterrows():
-            ws.append([row.get(h, "") for h in headers])
+        for _, r in df.iterrows():
+            ws.append([r.get(h, "") for h in headers])
 
-        # pewarnaan slot (tanpa border antar hari)
+        # pewarnaan
         self.apply_styles(ws, df, slot_str)
 
-        # Sheet Rekap
+        # semua fitur rekap
         self._create_rekap_layanan(wb, df, slot_str)
         self._create_rekap_poli(wb, df, slot_str)
         self._create_rekap_dokter(wb, df, slot_str)
         self._create_peak_hour(wb, df, slot_str)
         self._create_conflict_doctor(wb, df, slot_str)
+        self._create_conflict_map(wb, df, slot_str)
         self._create_grafik_poli(wb)
 
         # finishing
@@ -216,28 +262,24 @@ class ExcelWriter:
         buf.seek(0)
         return buf
 
-    # --------------------------------------------------------
-    # Pewarnaan slot (tanpa border antar hari)
-    # --------------------------------------------------------
+    # ======================================================================
+    # Pewarnaan slot (no border per day)
+    # ======================================================================
     def apply_styles(self, ws, df, slot_str):
-
-        counter = {hari: {s: 0 for s in slot_str} for hari in df["HARI"].unique()}
-        records = df.to_dict("records")
-
+        counter = {h: {s: 0 for s in slot_str} for h in df["HARI"].unique()}
         excel_row = 2
 
-        for rec in records:
-            hari = rec.get("HARI")
+        for rec in df.to_dict("records"):
+            hari = rec["HARI"]
 
             for idx, slot in enumerate(slot_str):
-                v = rec.get(slot, "")
+                val = rec.get(slot, "")
                 col_idx = 5 + idx
-
                 cell = ws.cell(row=excel_row, column=col_idx)
 
-                if v == "R":
+                if val == "R":
                     cell.fill = self.fill_r
-                elif v == "E":
+                elif val == "E":
                     counter[hari][slot] += 1
                     if counter[hari][slot] > self.config.max_poleks_per_slot:
                         cell.fill = self.fill_over
@@ -246,9 +288,9 @@ class ExcelWriter:
 
             excel_row += 1
 
-    # --------------------------------------------------------
-    # Styling profesional
-    # --------------------------------------------------------
+    # ======================================================================
+    # STYLING
+    # ======================================================================
     def _auto_width_all_sheets(self, wb):
         for ws in wb.worksheets:
             for col in ws.columns:
@@ -257,10 +299,10 @@ class ExcelWriter:
 
     def _style_headers_all(self, wb):
         for ws in wb.worksheets:
-            for cell in ws[1]:
-                cell.font = Font(bold=True)
-                cell.alignment = Alignment(horizontal="center")
-                cell.border = self.border_header
+            for c in ws[1]:
+                c.font = Font(bold=True)
+                c.alignment = Alignment(horizontal="center")
+                c.border = self.border_header
 
     def _freeze_headers_all(self, wb):
         for ws in wb.worksheets:
